@@ -1,0 +1,26 @@
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# Segredos e variáveis de ambiente
+.env
+.env.*
+
+# Python Cache
+__pycache__/
+*.py[cod]
+
+# Pytest e cobertura
+.pytest_cache/
+.coverage
+
+# Bases locais / dados
+chroma_db/
+*.sqlite3
+
+# Sistema / IDE
+.DS_Store
+.vscode/
+.idea/
+.ipynb_checkpoints/
