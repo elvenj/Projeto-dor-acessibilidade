@@ -53,9 +53,14 @@ def generate_response(llm, prompt: str, tools: list, max_iterations: int = 3,
             if isinstance(parsed, dict) and 'name' in parsed and 'arguments' in parsed:
                 matches = [candidate]
         if not matches:
+            if "<tool_call>" in response or "</tool_call>" in response:
+                return "Não consegui concluir a consulta."
             return re.sub(r'<\|im_end\|>\s*$', '', response).strip()
         if not remaining:
-            return response
+            return (
+                "Não consegui concluir a consulta. "
+                "Por favor, reformule sua pergunta."
+            )
 
         calls = []
         try:

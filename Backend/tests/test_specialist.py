@@ -77,10 +77,13 @@ class SpecialistToolsTests(unittest.TestCase):
         self.service.search_pages.assert_not_called()
         self.service.read_page.assert_not_called()
 
-    def test_no_evidence_does_not_replace_llm_answer(self):
+    def test_no_evidence_blocks_unsupported_answer(self):
         self.search.return_value = []
         self.generate.return_value = 'Resposta da LLM sem evidência.'
-        self.assertEqual(self.rag.rag_agent({}, 'SBI?'), self.generate.return_value)
+        self.assertEqual(
+            self.rag.rag_agent({}, 'SBI?'),
+            self.rag.INSUFFICIENT_EVIDENCE
+        )
 
     def test_refusal_with_context_is_returned_without_extractive_replacement(self):
         texts = json.loads((ROOT / 'tests/fixtures/area_logada.json').read_text(encoding='utf-8-sig'))
@@ -98,16 +101,93 @@ class SpecialistToolsTests(unittest.TestCase):
         self.generate.side_effect = choose
         self.assertEqual(self.rag.rag_agent({}, 'Biblioteca?'), 'Não encontrei informações.')
 
-    def test_tool_failure_does_not_replace_model_answer(self):
+    def test_tool_failure_without_evidence_blocks_answer(self):
         self.search.side_effect = RuntimeError('failed')
         self.generate.return_value = 'Posso explicar mesmo assim.'
         with self.assertLogs(self.rag.build_document_tool.__module__, level='ERROR'):
-            self.assertEqual(self.rag.rag_agent({}, 'Pergunta'), self.generate.return_value)
+            self.assertEqual(
+                self.rag.rag_agent({}, 'Pergunta'),
+                self.rag.INSUFFICIENT_EVIDENCE
+            )
 
-    def test_unconfirmed_url_is_not_filtered(self):
+    def test_empty_graph_and_documents_block_answer(self):
+
+        self.search.return_value = []
+        self.service.search_pages.return_value = []
+
+        def choose(*args, **kwargs):
+
+            self.tool(
+                kwargs, 'search_site_pages'
+            )(query='biblioteca')
+
+            return 'Resposta sem fundamentação.'
+
+        self.generate.side_effect = choose
+
+        self.assertEqual(
+            self.rag.rag_agent({}, 'Biblioteca?'),
+            self.rag.INSUFFICIENT_EVIDENCE
+        )
+
+    def test_unconfirmed_url_is_blocked(self):
         self.generate.return_value = 'Veja https://inventado.example/ [99]'
-        self.assertEqual(self.rag.rag_agent({}, 'curso SI'), self.generate.return_value)
+        self.assertEqual(
+            self.rag.rag_agent({}, 'curso SI'),
+            self.rag.UNVERIFIED_URL_RESPONSE
+        )
         self.service.search_pages.assert_not_called()
+
+    def test_verified_document_url_is_preserved(self):
+
+        self.search.return_value = [{
+            "source": "manual.pdf",
+            "page": 1,
+            "text": "Acesse " + TARGET
+        }]
+
+        self.generate.return_value = "Acesse " + TARGET
+
+        self.assertEqual(
+            self.rag.rag_agent({}, "Onde acesso o curso?"),
+            self.generate.return_value
+        )
+
+    def test_mixed_verified_and_unverified_urls_are_blocked(self):
+
+        self.search.return_value = [{
+            "source": "manual.pdf",
+            "page": 1,
+            "text": "Acesse " + TARGET
+        }]
+
+        self.generate.return_value = (
+            TARGET + " ou " + "https:" + "//inventado.example/"
+        )
+
+        self.assertEqual(
+            self.rag.rag_agent({}, "Onde acesso o curso?"),
+            self.rag.UNVERIFIED_URL_RESPONSE
+        )
+
+    def test_extracts_real_document_steps(self):
+
+        document = json.loads(
+            (ROOT / "tests/fixtures/vestibular_steps.json")
+            .read_text(encoding="utf-8")
+        )
+
+        self.search.return_value = [document]
+
+        answer = self.rag.rag_agent(
+            {},
+            "Quais são as quatro etapas do formulário de inscrição?"
+        )
+
+        for term in ["Login", "Curso", "Dados", "Inscrição"]:
+            self.assertIn(term, answer)
+
+        self.generate.assert_not_called()
 
     def test_responses_are_returned_verbatim(self):
         responses = [
@@ -121,7 +201,16 @@ class SpecialistToolsTests(unittest.TestCase):
         for response in responses:
             with self.subTest(response=response):
                 self.generate.return_value = response
-                self.assertEqual(self.rag.rag_agent({}, 'Pergunta'), response)
+                expected = (
+                    self.rag.UNVERIFIED_URL_RESPONSE
+                    if response.startswith('Veja ')
+                    else response
+                )
+
+                self.assertEqual(
+                    self.rag.rag_agent({}, 'Pergunta'),
+                    expected
+                )
 
 
 if __name__ == '__main__':

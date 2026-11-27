@@ -10,13 +10,43 @@ from Models.embedding_model import embedding_model
 _STOPWORDS = set("a o as os de da do das dos e em na no nas nos para por um uma quais qual que preciso precisa realizar como meu minha eu se ao os sao ser com fazer faco posso necessarios necessario necessarias necessaria quero gostaria saber".split())
 
 
+
+_NUMBER_WORDS = {
+    "um": "1", "dois": "2", "duas": "2",
+    "tres": "3", "quatro": "4", "cinco": "5",
+    "seis": "6", "sete": "7", "oito": "8",
+    "nove": "9", "dez": "10"
+}
+
+_STOPWORDS.update({
+    "sao", "sobre", "informacao", "informacoes",
+    "favor", "funciona", "funcionamento", "funcionar"
+})
+
+
 def _terms(text: str) -> set[str]:
     normalized = unicodedata.normalize("NFKD", text.casefold())
     normalized = "".join(c for c in normalized if not unicodedata.combining(c))
     words = re.findall(r"[a-z0-9]+", normalized)
     # Reúne flexões comuns sem depender de outro modelo.
-    return {word[:-1] if word.endswith("s") else word
-            for word in words if len(word) > 2 and word not in _STOPWORDS}
+    terms = set()
+
+    for word in words:
+
+        if word in _STOPWORDS:
+            continue
+
+        word = _NUMBER_WORDS.get(word, word)
+
+        if word.isdigit():
+            terms.add(word)
+
+        elif len(word) > 2:
+            terms.add(
+                word[:-1] if word.endswith("s") else word
+            )
+
+    return terms
 
 
 def _proximity(text: str, query_terms: set[str]) -> float:
@@ -45,7 +75,31 @@ def search_evidence(query: str, top_k: int = 5) -> list[dict]:
     count = collection.count()
     if not count:
         return []
-    query_terms = _terms(query)
+    all_terms = _terms(query)
+
+    requested_years = {
+        term for term in all_terms
+        if re.fullmatch(r"(?:19|20)\d{2}", term)
+    }
+
+    qualifiers = {
+        term for term in all_terms
+        if term.isdigit()
+    }
+
+    if {"puc", "campina"} <= all_terms:
+        qualifiers.update({"puc", "campina"})
+
+    query_terms = all_terms - qualifiers
+
+    if not query_terms:
+        query_terms = all_terms
+        qualifiers = set()
+
+    min_coverage = min(
+        1.0,
+        max(0.6, 2 / max(1, len(query_terms)))
+    )
     query_embedding = embedding_model.encode(query, normalize_embeddings=True).tolist()
     results = collection.query(
         query_embeddings=[query_embedding], n_results=min(count, max(30, top_k * 6)),
@@ -65,7 +119,7 @@ def search_evidence(query: str, top_k: int = 5) -> list[dict]:
         batch = collection.get(limit=500, offset=offset, include=["documents", "metadatas"])
         for identifier, text, metadata in zip(batch["ids"], batch["documents"], batch["metadatas"]):
             coverage = len(query_terms & _terms(text or "")) / max(1, len(query_terms))
-            if query_terms and coverage == 1:
+            if query_terms and coverage >= min_coverage:
                 lexical.append((identifier, text, metadata or {}))
     for identifier, text, metadata in lexical:
         if identifier not in candidates:
@@ -76,14 +130,48 @@ def search_evidence(query: str, top_k: int = 5) -> list[dict]:
     for text, metadata, distance in candidates.values():
         if not text:
             continue
+
+        # Evitar misturar edições distintas do vestibular
+        if (
+            "vestibular" in all_terms
+            and len(requested_years) == 1
+            and not requested_years.issubset(_terms(text))
+        ):
+            continue
         coverage = len(query_terms & _terms(text)) / max(1, len(query_terms))
         # Exige evidência dos termos centrais, além da proximidade semântica.
-        if query_terms and coverage < min(1.0, 2 / len(query_terms)):
+        if query_terms and coverage < min_coverage:
             continue
         if distance is not None and (not math.isfinite(distance) or distance > max_distance) and coverage < 1:
             continue
         similarity = max(0.0, 1 - distance) if distance is not None else 0.0
-        ranked.append((0.35 * coverage + 0.15 * similarity + 0.5 * _proximity(text, query_terms), {
+        matched_terms = query_terms & _terms(text)
+
+        proximity = (
+            _proximity(text, matched_terms)
+            if len(matched_terms) >= 2
+            else 0.0
+        )
+
+        qualifier_score = (
+            len(qualifiers & _terms(text))
+            / max(1, len(qualifiers))
+        )
+
+        score = (
+            0.55 * coverage
+            + 0.25 * proximity * coverage
+            + 0.10 * similarity
+            + 0.10 * qualifier_score
+        )
+
+        # Priorizar títulos relacionados em consultas amplas
+        if len(query_terms) == 1:
+            source_terms = _terms(metadata.get("source") or "")
+            if query_terms & source_terms:
+                score += 0.30
+
+        ranked.append((score, {
             "text": text, "source": metadata.get("source", "Fonte não identificada (índice antigo)"),
             "page": metadata.get("page"), "distance": distance,
         }))

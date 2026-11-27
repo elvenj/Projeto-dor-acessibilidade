@@ -63,6 +63,38 @@ class RetrievalTests(unittest.TestCase):
         }
         self.assertEqual(self.search.search_evidence('Documentos para matrícula')[0]['page'], 42)
 
+    def test_broad_institutional_query(self):
+
+        self.results([
+            "Vestibular da PUC-Campinas: processo seletivo."
+        ])
+
+        evidence = self.search.search_evidence(
+            "Como funciona o vestibular da PUC-Campinas?"
+        )
+
+        self.assertEqual(len(evidence), 1)
+
+    def test_requested_year_is_respected(self):
+
+        self.results([
+            "Matrícula do Vestibular 2027."
+        ])
+
+        self.assertEqual(
+            self.search.search_evidence(
+                "Matrícula do Vestibular 2040"
+            ),
+            []
+        )
+
+        self.assertEqual(
+            len(self.search.search_evidence(
+                "Matrícula do Vestibular 2027"
+            )),
+            1
+        )
+
     def test_empty_collection_does_not_embed(self):
         self.collection.count.return_value = 0
         self.assertEqual(self.search.search_evidence('matrícula'), [])
@@ -83,13 +115,20 @@ class RagTests(unittest.TestCase):
         })
         self.rag.search_evidence = self.search
 
-    def test_no_evidence_still_returns_generated_response(self):
+    def test_no_evidence_blocks_generation(self):
         self.search.return_value = []
         self.generate.return_value = 'Resposta original.'
         report = self.rag.diagnose_rag({}, 'documentos?')
-        self.assertEqual(report['response'], 'Resposta original.')
-        self.assertEqual(report['raw_response'], 'Resposta original.')
-        self.generate.assert_called_once()
+        self.assertEqual(
+            report['response'],
+            self.rag.INSUFFICIENT_EVIDENCE
+        )
+        self.assertEqual(
+            report['status'],
+            'insufficient_evidence'
+        )
+        self.assertIsNone(report['raw_response'])
+        self.generate.assert_not_called()
 
     def test_generated_response_and_system_rules_are_preserved(self):
         self.search.return_value = [{'source': 'manual.pdf', 'page': 42, 'text': 'RG e histórico'}]
@@ -119,6 +158,37 @@ class RagTests(unittest.TestCase):
         self.assertEqual(report['status'], 'answered')
         self.assertIn('[9]', report['response'])
         self.assertIn('[9]', report['raw_response'])
+
+    def test_unverified_url_is_blocked_in_diagnostic(self):
+
+        evidence = [{
+            "source": "guia.pdf",
+            "page": 12,
+            "text": "Informações institucionais."
+        }]
+
+        self.generate.return_value = (
+            "Acesse " + "https:" + "//inventado.example/"
+        )
+
+        report = self.rag.diagnose_rag(
+            {}, "Onde acesso?", evidence
+        )
+
+        self.assertEqual(
+            report["status"],
+            "unverified_url"
+        )
+
+        self.assertEqual(
+            report["response"],
+            self.rag.UNVERIFIED_URL_RESPONSE
+        )
+
+        self.assertEqual(
+            report["raw_response"],
+            self.generate.return_value
+        )
 
     def test_model_abstention_and_empty_output_have_distinct_statuses(self):
         evidence = [{'source': 'guia.pdf', 'page': 12, 'text': 'Braille'}]

@@ -91,7 +91,8 @@ class ToolExecutionTests(unittest.TestCase):
         self.turn.return_value = self.call()
         response = self.engine.generate_response({}, 'teste', [self.tool], max_iterations=2)
         self.assertEqual(len(self.executed), 2)
-        self.assertEqual(response, self.call())
+        self.assertNotIn('<tool_call>', response)
+        self.assertIn('Não consegui concluir', response)
 
     def test_tool_exception_is_reported_without_exposing_exception(self):
         def broken(query: str):
