@@ -18,6 +18,7 @@ FUNDAMENTAÇÃO:
 CONTEXTO INSTITUCIONAL:
 - Vestibular é um processo seletivo para ingresso universitário,
   não um concurso público.
+- Documentos para fazer uma prova NÃO são documentos para matrícula.
 - Diferencie inscrição, prova, matrícula, bolsas e estágio.
 - Diferencie vestibular regular, Vestibular Social e ProUni.
 - Não transfira regras entre cursos, modalidades ou anos.
